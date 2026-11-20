@@ -1,4 +1,4 @@
-﻿
+
 <svelte:head>
 	<title>Gestión de Estudiantes | Alerta Temprana</title>
 	<meta
@@ -14,7 +14,7 @@
 	import SearchBar from '$lib/components/SearchBar.svelte';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
 
-	const API_URL = 'http://127.0.0.1:8001';
+	const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8001';
 
 	interface Estudiante {
 		id_estudiante: number;

@@ -5,7 +5,7 @@
 <script lang="ts">
     import { onMount } from 'svelte';
 
-    const API_URL = 'http://127.0.0.1:8001';
+    const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8001';
     const ID_USUARIO = 1; // Temporal hasta integrar la autenticación.
 
     interface Modulo {

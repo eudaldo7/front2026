@@ -7,7 +7,7 @@
     import { onMount } from 'svelte';
     import GraficosDashboard from '$lib/components/dashboard/GraficosDashboard.svelte';
 
-    const API_URL = 'http://127.0.0.1:8001';
+    const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8001';
 
     interface Estudiante {
         id_estudiante: number;

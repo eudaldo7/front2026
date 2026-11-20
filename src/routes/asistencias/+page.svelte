@@ -1,4 +1,4 @@
-﻿<svelte:head>
+<svelte:head>
 	<title>GestiÃ³n de Asistencias | Alerta Temprana</title>
 	<meta
 		name="description"
@@ -10,7 +10,7 @@
 	import { onMount } from 'svelte';
 import DataTable from '$lib/components/DataTable.svelte';
 
-	const API_URL = 'http://127.0.0.1:8001';
+	const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8001';
 
 	interface Asistencia {
 		id_asistencia: number;
