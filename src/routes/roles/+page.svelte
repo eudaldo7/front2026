@@ -1,262 +1,434 @@
 
 <svelte:head>
-	<title>Roles</title>
+    <title>Roles | Alerta Temprana</title>
 </svelte:head>
 
 <script lang="ts">
-	import { onMount } from 'svelte';
+    import { onMount } from 'svelte';
 
-	const API_URL = 'http://127.0.0.1:8001';
-	const ID_USUARIO = 1; // Temporal hasta integrar la autenticación.
+    const API_URL = 'http://127.0.0.1:8001';
 
-	interface Rol {
-		id_rol: number;
-		nombre: string;
-		descripcion?: string;
-		estado?: boolean;
-	}
+    interface Rol {
+        id_rol: number;
+        nombre: string;
+        descripcion?: string;
+        estado?: boolean;
+    }
 
-	let roles: Rol[] = [];
-	let nombre = '';
-	let descripcion = '';
+    let roles = $state<Rol[]>([]);
+    let nombre = $state('');
+    let descripcion = $state('');
 
-	let mostrarFormulario = false;
-	let cargando = false;
-	let guardando = false;
-	let error = '';
-	let mensaje = '';
+    let rolEditando = $state<number | null>(null);
+    let mostrarFormulario = $state(false);
+    let cargando = $state(false);
+    let guardando = $state(false);
+    let error = $state('');
+    let mensaje = $state('');
 
-	async function cargarRoles() {
-		cargando = true;
-		error = '';
-		mensaje = '';
+    function obtenerSesion() {
+        const token = localStorage.getItem('tokenAcceso');
+        const usuarioTexto = localStorage.getItem('usuarioSesion');
 
-		try {
-			const respuesta = await fetch(
-				`${API_URL}/roles/?id_usuario=${ID_USUARIO}`
-			);
+        if (!token || !usuarioTexto) {
+            throw new Error(
+                'No hay una sesión válida. Cierra sesión e inicia sesión nuevamente.'
+            );
+        }
 
-			if (!respuesta.ok) {
-				throw new Error('No se pudieron consultar los roles.');
-			}
+        let usuario: { id_usuario?: number };
 
-			const datos = await respuesta.json();
-			roles = Array.isArray(datos) ? datos : [];
-		} catch (e) {
-			error =
-				e instanceof Error
-					? e.message
-					: 'Ocurrió un error al cargar los roles.';
-		} finally {
-			cargando = false;
-		}
-	}
+        try {
+            usuario = JSON.parse(usuarioTexto);
+        } catch {
+            throw new Error('No se pudo leer la sesión del usuario.');
+        }
 
-	async function crearRol() {
-		error = '';
-		mensaje = '';
+        if (!usuario.id_usuario) {
+            throw new Error('La sesión no contiene un ID de usuario válido.');
+        }
 
-		if (!nombre.trim()) {
-			error = 'Escribe el nombre del rol.';
-			return;
-		}
+        return {
+            token,
+            idUsuario: usuario.id_usuario
+        };
+    }
 
-		guardando = true;
+    async function solicitarAPI(
+        ruta: string,
+        opciones: RequestInit = {}
+    ): Promise<Response> {
+        const { token } = obtenerSesion();
 
-		try {
-			const respuesta = await fetch(
-				`${API_URL}/roles/?id_usuario=${ID_USUARIO}`,
-				{
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json'
-					},
-					body: JSON.stringify({
-						nombre: nombre.trim(),
-						descripcion: descripcion.trim()
-					})
-				}
-			);
+        const respuesta = await fetch(`${API_URL}${ruta}`, {
+            ...opciones,
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+                ...(opciones.headers ?? {})
+            }
+        });
 
-			const datos = await respuesta.json().catch(() => null);
+        if (respuesta.status === 401) {
+            throw new Error(
+                'La sesión expiró o el token no es válido. Inicia sesión nuevamente.'
+            );
+        }
 
-			if (!respuesta.ok) {
-				throw new Error(
-					datos?.detail ?? 'No se pudo registrar el rol.'
-				);
-			}
+        return respuesta;
+    }
 
-			nombre = '';
-			descripcion = '';
-			mostrarFormulario = false;
-			mensaje = 'Rol registrado correctamente.';
+    async function obtenerError(respuesta: Response): Promise<string> {
+        try {
+            const datos = await respuesta.json();
+            return datos.detail ?? datos.mensaje ?? `Error HTTP ${respuesta.status}`;
+        } catch {
+            return `Error HTTP ${respuesta.status}`;
+        }
+    }
 
-			await cargarRoles();
-		} catch (e) {
-			error =
-				e instanceof Error
-					? e.message
-					: 'Ocurrió un error al registrar el rol.';
-		} finally {
-			guardando = false;
-		}
-	}
+    async function cargarRoles() {
+        cargando = true;
+        error = '';
 
-	onMount(cargarRoles);
+        try {
+            const { idUsuario } = obtenerSesion();
+
+            const respuesta = await solicitarAPI(
+                `/roles/?id_usuario=${idUsuario}`
+            );
+
+            if (!respuesta.ok) {
+                throw new Error(await obtenerError(respuesta));
+            }
+
+            const datos = await respuesta.json();
+            roles = Array.isArray(datos) ? datos : [];
+        } catch (e) {
+            error = e instanceof Error
+                ? e.message
+                : 'No fue posible cargar los roles.';
+        } finally {
+            cargando = false;
+        }
+    }
+
+    function limpiarFormulario() {
+        nombre = '';
+        descripcion = '';
+        rolEditando = null;
+        mostrarFormulario = false;
+    }
+
+    function nuevoRol() {
+        limpiarFormulario();
+        error = '';
+        mensaje = '';
+        mostrarFormulario = true;
+    }
+
+    function editarRol(rol: Rol) {
+        rolEditando = rol.id_rol;
+        nombre = rol.nombre;
+        descripcion = rol.descripcion ?? '';
+
+        mostrarFormulario = true;
+        error = '';
+        mensaje = '';
+
+        window.scrollTo({
+            top: 0,
+            behavior: 'smooth'
+        });
+    }
+
+    async function guardarRol() {
+        error = '';
+        mensaje = '';
+
+        if (!nombre.trim()) {
+            error = 'Escribe el nombre del rol.';
+            return;
+        }
+
+        guardando = true;
+
+        try {
+            const { idUsuario } = obtenerSesion();
+            const editando = rolEditando !== null;
+
+            const ruta = editando
+                ? `/roles/${rolEditando}?id_usuario=${idUsuario}`
+                : `/roles/?id_usuario=${idUsuario}`;
+
+            const respuesta = await solicitarAPI(ruta, {
+                method: editando ? 'PUT' : 'POST',
+                body: JSON.stringify({
+                    nombre: nombre.trim(),
+                    descripcion: descripcion.trim()
+                })
+            });
+
+            if (!respuesta.ok) {
+                throw new Error(await obtenerError(respuesta));
+            }
+
+            const resultado = await respuesta.json().catch(() => ({}));
+
+            mensaje = resultado.mensaje ?? (
+                editando
+                    ? 'Rol actualizado correctamente.'
+                    : 'Rol registrado correctamente.'
+            );
+
+            limpiarFormulario();
+            await cargarRoles();
+        } catch (e) {
+            error = e instanceof Error
+                ? e.message
+                : 'No fue posible guardar el rol.';
+        } finally {
+            guardando = false;
+        }
+    }
+
+    async function inactivarRol(rol: Rol) {
+        const confirmar = window.confirm(
+            `¿Deseas inactivar el rol "${rol.nombre}"?`
+        );
+
+        if (!confirmar) return;
+
+        error = '';
+        mensaje = '';
+
+        try {
+            const { idUsuario } = obtenerSesion();
+
+            const respuesta = await solicitarAPI(
+                `/roles/${rol.id_rol}?id_usuario=${idUsuario}`,
+                { method: 'DELETE' }
+            );
+
+            if (!respuesta.ok) {
+                throw new Error(await obtenerError(respuesta));
+            }
+
+            const resultado = await respuesta.json();
+
+            mensaje = resultado.mensaje ?? 'Rol inactivado correctamente.';
+
+            if (rolEditando === rol.id_rol) {
+                limpiarFormulario();
+            }
+
+            await cargarRoles();
+        } catch (e) {
+            error = e instanceof Error
+                ? e.message
+                : 'No fue posible inactivar el rol.';
+        }
+    }
+
+    onMount(() => {
+        cargarRoles();
+    });
 </script>
 
-<div class="container mt-4">
-	<div class="d-flex justify-content-between align-items-center mb-4">
-		<div>
-			<h2>Gestión de Roles</h2>
-			<p class="text-muted">
-				Administración de los roles del sistema.
-			</p>
-		</div>
+<div class="container-fluid px-4 py-4">
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-3 mb-4">
+        <div>
+            <h1 class="h3 fw-bold mb-2">Gestión de Roles</h1>
+            <p class="text-muted mb-0">
+                Administración de los roles del sistema.
+            </p>
+        </div>
 
-		<button
-			class="btn btn-primary"
-			onclick={() => {
-				mostrarFormulario = !mostrarFormulario;
-				error = '';
-				mensaje = '';
-			}}
-		>
-			{mostrarFormulario ? 'Cancelar' : '+ Nuevo rol'}
-		</button>
-	</div>
+        <button
+            type="button"
+            class="btn btn-primary"
+            onclick={nuevoRol}
+            disabled={cargando}
+        >
+            + Nuevo rol
+        </button>
+    </div>
 
-	{#if mensaje}
-		<div class="alert alert-success" role="alert">{mensaje}</div>
-	{/if}
+    {#if mensaje}
+        <div class="alert alert-success alert-dismissible" role="alert">
+            {mensaje}
+            <button
+                type="button"
+                class="btn-close"
+                aria-label="Cerrar mensaje"
+                onclick={() => mensaje = ''}
+            ></button>
+        </div>
+    {/if}
 
-	{#if error}
-		<div class="alert alert-danger" role="alert">
-			{error}
-			<button class="btn btn-sm btn-outline-danger ms-2" onclick={cargarRoles}>
-				Reintentar
-			</button>
-		</div>
-	{/if}
+    {#if error}
+        <div class="alert alert-danger alert-dismissible" role="alert">
+            {error}
+            <button
+                type="button"
+                class="btn-close"
+                aria-label="Cerrar mensaje"
+                onclick={() => error = ''}
+            ></button>
+        </div>
+    {/if}
 
-	{#if mostrarFormulario}
-		<div class="card shadow-sm mb-4">
-			<div class="card-header">
-				<strong>Registrar nuevo rol</strong>
-			</div>
+    {#if mostrarFormulario}
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header bg-primary text-white py-3">
+                <h2 class="h5 mb-0">
+                    {rolEditando !== null ? 'Editar rol' : 'Registrar nuevo rol'}
+                </h2>
+            </div>
 
-			<div class="card-body">
-				<form
-					onsubmit={(event) => {
-						event.preventDefault();
-						crearRol();
-					}}
-				>
-					<div class="row g-3">
-						<div class="col-md-6">
-							<label for="nombre" class="form-label">
-								Nombre del rol
-							</label>
+            <div class="card-body p-4">
+                <form onsubmit={(event) => {
+                    event.preventDefault();
+                    guardarRol();
+                }}>
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label for="nombre" class="form-label">
+                                Nombre del rol
+                            </label>
+                            <input
+                                id="nombre"
+                                class="form-control"
+                                bind:value={nombre}
+                                maxlength="100"
+                                required
+                            />
+                        </div>
 
-							<input
-								id="nombre"
-								class="form-control"
-								bind:value={nombre}
-								maxlength="100"
-								required
-							/>
-						</div>
+                        <div class="col-md-6">
+                            <label for="descripcion" class="form-label">
+                                Descripción
+                            </label>
+                            <input
+                                id="descripcion"
+                                class="form-control"
+                                bind:value={descripcion}
+                                maxlength="250"
+                                placeholder="Funciones principales del rol"
+                            />
+                        </div>
+                    </div>
 
-						<div class="col-md-6">
-							<label for="descripcion" class="form-label">
-								Descripción
-							</label>
+                    <div class="d-flex gap-2 mt-4">
+                        <button
+                            type="submit"
+                            class="btn btn-success"
+                            disabled={guardando}
+                        >
+                            {guardando
+                                ? 'Guardando...'
+                                : rolEditando !== null
+                                    ? 'Guardar cambios'
+                                    : 'Registrar rol'}
+                        </button>
 
-							<input
-								id="descripcion"
-								class="form-control"
-								bind:value={descripcion}
-								maxlength="250"
-								placeholder="Funciones principales del rol"
-							/>
-						</div>
+                        <button
+                            type="button"
+                            class="btn btn-outline-secondary"
+                            onclick={limpiarFormulario}
+                            disabled={guardando}
+                        >
+                            Cancelar
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    {/if}
 
-						<div class="col-12">
-							<button
-								type="submit"
-								class="btn btn-success"
-								disabled={guardando}
-							>
-								{guardando ? 'Guardando...' : 'Guardar rol'}
-							</button>
-						</div>
-					</div>
-				</form>
-			</div>
-		</div>
-	{/if}
+    <div class="card shadow-sm border-0">
+        <div class="card-header bg-white d-flex justify-content-between align-items-center py-3">
+            <h2 class="h5 mb-0">Listado de roles</h2>
 
-	<div class="card shadow-sm">
-		<div class="card-header d-flex justify-content-between align-items-center">
-			<strong>Listado de roles</strong>
+            <button
+                type="button"
+                class="btn btn-sm btn-outline-primary"
+                onclick={cargarRoles}
+                disabled={cargando}
+            >
+                {cargando ? 'Cargando...' : 'Actualizar'}
+            </button>
+        </div>
 
-			<button
-				class="btn btn-sm btn-outline-primary"
-				onclick={cargarRoles}
-				disabled={cargando}
-			>
-				{cargando ? 'Cargando...' : 'Actualizar'}
-			</button>
-		</div>
+        <div class="card-body">
+            {#if cargando}
+                <div class="text-center py-4">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Cargando...</span>
+                    </div>
+                    <p class="text-muted mt-2">Consultando roles...</p>
+                </div>
+            {:else if roles.length === 0}
+                <div class="alert alert-info mb-0">
+                    No hay roles registrados para mostrar.
+                </div>
+            {:else}
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>ID</th>
+                                <th>Nombre del rol</th>
+                                <th>Descripción</th>
+                                <th>Estado</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
 
-		<div class="card-body">
-			{#if cargando}
-				<div class="text-center py-4">
-					<div class="spinner-border text-primary" role="status">
-						<span class="visually-hidden">Cargando...</span>
-					</div>
-					<p class="text-muted mt-2">Consultando roles...</p>
-				</div>
-			{:else if roles.length === 0}
-				<div class="alert alert-info mb-0">
-					No hay roles registrados para mostrar.
-				</div>
-			{:else}
-				<div class="table-responsive">
-					<table class="table table-hover align-middle">
-						<thead class="table-dark">
-							<tr>
-								<th>ID</th>
-								<th>Nombre del rol</th>
-								<th>Descripción</th>
-								<th>Estado</th>
-							</tr>
-						</thead>
+                        <tbody>
+                            {#each roles as rol (rol.id_rol)}
+                                <tr>
+                                    <td>{rol.id_rol}</td>
+                                    <td>{rol.nombre}</td>
+                                    <td>{rol.descripcion || 'Sin descripción'}</td>
+                                    <td>
+                                        {#if rol.estado === false}
+                                            <span class="badge text-bg-secondary">
+                                                Inactivo
+                                            </span>
+                                        {:else}
+                                            <span class="badge text-bg-success">
+                                                Activo
+                                            </span>
+                                        {/if}
+                                    </td>
+                                    <td>
+                                        <div class="d-flex gap-2">
+                                            <button
+                                                type="button"
+                                                class="btn btn-sm btn-warning"
+                                                onclick={() => editarRol(rol)}
+                                                disabled={rol.estado === false}
+                                            >
+                                                Editar
+                                            </button>
 
-						<tbody>
-							{#each roles as rol (rol.id_rol)}
-								<tr>
-									<td>{rol.id_rol}</td>
-									<td>{rol.nombre}</td>
-									<td>{rol.descripcion || 'Sin descripción'}</td>
-									<td>
-										{#if rol.estado === false}
-											<span class="badge text-bg-secondary">
-												Inactivo
-											</span>
-										{:else}
-											<span class="badge text-bg-success">
-												Activo
-											</span>
-										{/if}
-									</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-			{/if}
-		</div>
-	</div>
+                                            <button
+                                                type="button"
+                                                class="btn btn-sm btn-danger"
+                                                onclick={() => inactivarRol(rol)}
+                                                disabled={rol.estado === false}
+                                            >
+                                                Inactivar
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            {/each}
+                        </tbody>
+                    </table>
+                </div>
+            {/if}
+        </div>
+    </div>
 </div>
-

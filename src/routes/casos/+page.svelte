@@ -1,383 +1,599 @@
-
 <svelte:head>
-	<title>Casos</title>
+    <title>Gestión de casos | Alerta Temprana</title>
+    <meta
+        name="description"
+        content="Registro, consulta y administración de casos de acompañamiento escolar."
+    />
 </svelte:head>
 
 <script lang="ts">
-	import { onMount } from 'svelte';
+    import { onMount } from 'svelte';
 
-	const API_URL = 'http://127.0.0.1:8001';
-	const ID_USUARIO = 1; // Temporal hasta integrar la autenticación.
+    const API_URL = 'http://127.0.0.1:8001';
 
-	interface Caso {
-		id_caso: number;
-		id_estudiante: number;
-		id_usuario_responsable: number;
-		fecha_apertura: string;
-		estado?: boolean;
-		nombre_estudiante?: string;
-		apellido_estudiante?: string;
-		nombre_responsable?: string;
-		apellido_responsable?: string;
-	}
+    interface Caso {
+        id_caso: number;
+        id_estudiante: number;
+        id_usuario_responsable: number;
+        fecha_apertura: string;
+        estado?: boolean;
+        nombre_estudiante?: string;
+        apellido_estudiante?: string;
+        nombre_responsable?: string;
+        apellido_responsable?: string;
+    }
 
-	interface Estudiante {
-		id_estudiante: number;
-		nombre: string;
-		apellido: string;
-	}
+    interface Estudiante {
+        id_estudiante: number;
+        nombre: string;
+        apellido: string;
+    }
 
-	interface Usuario {
-		id_usuario: number;
-		nombre: string;
-		apellido: string;
-		id_rol?: number;
-	}
+    interface Usuario {
+        id_usuario: number;
+        nombre: string;
+        apellido: string;
+        id_rol?: number;
+        correo?: string;
+    }
 
-	let casos: Caso[] = [];
-	let estudiantes: Estudiante[] = [];
-	let usuarios: Usuario[] = [];
+    interface Sesion {
+        id_usuario?: number;
+        [key: string]: unknown;
+    }
 
-	let idEstudiante = '';
-	let idResponsable = '';
-	let fechaApertura = new Date().toISOString().slice(0, 10);
+    let casos = $state<Caso[]>([]);
+    let estudiantes = $state<Estudiante[]>([]);
+    let usuarios = $state<Usuario[]>([]);
 
-	let mostrarFormulario = false;
-	let cargando = false;
-	let guardando = false;
-	let error = '';
-	let mensaje = '';
+    let idUsuario = 0;
+    let token = '';
 
-	function nombreEstudiante(caso: Caso) {
-		if (caso.nombre_estudiante || caso.apellido_estudiante) {
-			return `${caso.nombre_estudiante ?? ''} ${caso.apellido_estudiante ?? ''}`.trim();
-		}
+    let idEstudiante = $state('');
+    let idResponsable = $state('');
+    let fechaApertura = $state(new Date().toISOString().slice(0, 10));
 
-		const estudiante = estudiantes.find(
-			(e) => e.id_estudiante === caso.id_estudiante
-		);
+    let mostrarFormulario = $state(false);
+    let cargando = $state(false);
+    let guardando = $state(false);
+    let error = $state('');
+    let mensaje = $state('');
 
-		return estudiante
-			? `${estudiante.nombre} ${estudiante.apellido}`
-			: `Estudiante #${caso.id_estudiante}`;
-	}
+    let idCasoEditando = $state<number | null>(null);
+    let casoEliminando = $state<number | null>(null);
+    let sesionLista = $state(false);
 
-	function nombreResponsable(caso: Caso) {
-		if (caso.nombre_responsable || caso.apellido_responsable) {
-			return `${caso.nombre_responsable ?? ''} ${caso.apellido_responsable ?? ''}`.trim();
-		}
+    function nombreEstudiante(caso: Caso): string {
+        if (caso.nombre_estudiante || caso.apellido_estudiante) {
+            return `${caso.nombre_estudiante ?? ''} ${caso.apellido_estudiante ?? ''}`.trim();
+        }
 
-		const usuario = usuarios.find(
-			(u) => u.id_usuario === caso.id_usuario_responsable
-		);
+        const estudiante = estudiantes.find(
+            (e) => Number(e.id_estudiante) === Number(caso.id_estudiante)
+        );
 
-		return usuario
-			? `${usuario.nombre} ${usuario.apellido}`
-			: `Usuario #${caso.id_usuario_responsable}`;
-	}
+        return estudiante
+            ? `${estudiante.nombre} ${estudiante.apellido}`
+            : `Estudiante #${caso.id_estudiante}`;
+    }
 
-	function formatearFecha(fecha: string) {
-		if (!fecha) return 'Sin fecha';
+    function nombreResponsable(caso: Caso): string {
+        if (caso.nombre_responsable || caso.apellido_responsable) {
+            return `${caso.nombre_responsable ?? ''} ${caso.apellido_responsable ?? ''}`.trim();
+        }
 
-		const partes = fecha.slice(0, 10).split('-');
+        const usuario = usuarios.find(
+            (u) => Number(u.id_usuario) === Number(caso.id_usuario_responsable)
+        );
 
-		return partes.length === 3
-			? `${partes[2]}/${partes[1]}/${partes[0]}`
-			: fecha;
-	}
+        return usuario
+            ? `${usuario.nombre} ${usuario.apellido}`.trim()
+            : `Usuario #${caso.id_usuario_responsable}`;
+    }
 
-	function estadoCaso(caso: Caso) {
-		// El repositorio actual maneja un campo booleano estado.
-		return caso.estado === false ? 'Inactivo' : 'Activo';
-	}
+    function formatearFecha(fecha: string): string {
+        if (!fecha) return 'Sin fecha';
 
-	function claseEstado(caso: Caso) {
-		return caso.estado === false
-			? 'text-bg-secondary'
-			: 'text-bg-warning';
-	}
+        const partes = fecha.slice(0, 10).split('-');
 
-	async function cargarDatos() {
-		cargando = true;
-		error = '';
-		mensaje = '';
+        return partes.length === 3
+            ? `${partes[2]}/${partes[1]}/${partes[0]}`
+            : fecha;
+    }
 
-		try {
-			const [respuestaCasos, respuestaEstudiantes, respuestaUsuarios] =
-				await Promise.all([
-					fetch(`${API_URL}/casos/?id_usuario=${ID_USUARIO}`),
-					fetch(`${API_URL}/estudiantes/?id_usuario=${ID_USUARIO}`),
-					fetch(`${API_URL}/usuarios/?id_usuario=${ID_USUARIO}`)
-				]);
+    function estadoCaso(caso: Caso): string {
+        return caso.estado === false ? 'Inactivo' : 'Activo';
+    }
 
-			if (!respuestaCasos.ok) {
-				throw new Error('No se pudieron consultar los casos.');
-			}
+    function claseEstado(caso: Caso): string {
+        return caso.estado === false
+            ? 'text-bg-secondary'
+            : 'text-bg-success';
+    }
 
-			if (!respuestaEstudiantes.ok) {
-				throw new Error('No se pudo consultar la lista de estudiantes.');
-			}
+    function limpiarFormulario() {
+        idCasoEditando = null;
+        idEstudiante = '';
+        idResponsable = '';
+        fechaApertura = new Date().toISOString().slice(0, 10);
+        mostrarFormulario = false;
+    }
 
-			if (!respuestaUsuarios.ok) {
-				throw new Error('No se pudo consultar la lista de responsables.');
-			}
+    async function solicitarAPI(
+        ruta: string,
+        opciones: RequestInit = {}
+    ): Promise<Response> {
+        const encabezados = new Headers(opciones.headers);
+        encabezados.set('Authorization', `Bearer ${token}`);
 
-			const datosCasos = await respuestaCasos.json();
-			const datosEstudiantes = await respuestaEstudiantes.json();
-			const datosUsuarios = await respuestaUsuarios.json();
+        if (opciones.body && !encabezados.has('Content-Type')) {
+            encabezados.set('Content-Type', 'application/json');
+        }
 
-			casos = Array.isArray(datosCasos) ? datosCasos : [];
-			estudiantes = Array.isArray(datosEstudiantes)
-				? datosEstudiantes
-				: [];
-			usuarios = Array.isArray(datosUsuarios) ? datosUsuarios : [];
-		} catch (e) {
-			error =
-				e instanceof Error
-					? e.message
-					: 'Ocurrió un error al cargar la información.';
-		} finally {
-			cargando = false;
-		}
-	}
+        return fetch(`${API_URL}${ruta}`, {
+            ...opciones,
+            headers: encabezados
+        });
+    }
 
-	async function abrirCaso() {
-		error = '';
-		mensaje = '';
+    async function leerRespuesta(respuesta: Response): Promise<any> {
+        const texto = await respuesta.text();
 
-		if (!idEstudiante || !idResponsable || !fechaApertura) {
-			error = 'Completa todos los campos para abrir el caso.';
-			return;
-		}
+        if (!texto) return null;
 
-		guardando = true;
+        try {
+            return JSON.parse(texto);
+        } catch {
+            return { detail: texto };
+        }
+    }
 
-		try {
-			const respuesta = await fetch(
-				`${API_URL}/casos/?id_usuario=${ID_USUARIO}`,
-				{
-					method: 'POST',
-					headers: {
-						'Content-Type': 'application/json'
-					},
-					body: JSON.stringify({
-						id_estudiante: Number(idEstudiante),
-						id_usuario_responsable: Number(idResponsable),
-						fecha_apertura: fechaApertura
-					})
-				}
-			);
+    function mensajeError(datos: any, predeterminado: string): string {
+        if (typeof datos?.detail === 'string') {
+            return datos.detail;
+        }
 
-			const datos = await respuesta.json().catch(() => null);
+        if (Array.isArray(datos?.detail)) {
+            return datos.detail
+                .map((item: any) => item.msg ?? JSON.stringify(item))
+                .join(', ');
+        }
 
-			if (!respuesta.ok) {
-				throw new Error(
-					datos?.detail ?? 'No se pudo abrir el caso.'
-				);
-			}
+        return predeterminado;
+    }
 
-			mensaje = 'Caso registrado correctamente.';
-			mostrarFormulario = false;
-			idEstudiante = '';
-			idResponsable = '';
-			fechaApertura = new Date().toISOString().slice(0, 10);
+    async function cargarDatos() {
+        if (!sesionLista || !idUsuario || !token) {
+            error = 'No se encontró una sesión válida. Inicia sesión nuevamente.';
+            cargando = false;
+            return;
+        }
 
-			await cargarDatos();
-		} catch (e) {
-			error =
-				e instanceof Error
-					? e.message
-					: 'Ocurrió un error al registrar el caso.';
-		} finally {
-			guardando = false;
-		}
-	}
+        cargando = true;
+        error = '';
 
-	onMount(cargarDatos);
+        try {
+            const [respuestaCasos, respuestaEstudiantes, respuestaUsuarios] =
+                await Promise.all([
+                    solicitarAPI(`/casos/?id_usuario=${idUsuario}`),
+                    solicitarAPI(`/estudiantes/?id_usuario=${idUsuario}`),
+                    solicitarAPI(`/usuarios/?id_usuario=${idUsuario}`)
+                ]);
+
+            const datosCasos = await leerRespuesta(respuestaCasos);
+            const datosEstudiantes = await leerRespuesta(respuestaEstudiantes);
+            const datosUsuarios = await leerRespuesta(respuestaUsuarios);
+
+            if (!respuestaCasos.ok) {
+                throw new Error(
+                    mensajeError(datosCasos, 'No se pudieron consultar los casos.')
+                );
+            }
+
+            if (!respuestaEstudiantes.ok) {
+                throw new Error(
+                    mensajeError(datosEstudiantes, 'No se pudo consultar la lista de estudiantes.')
+                );
+            }
+
+            if (!respuestaUsuarios.ok) {
+                throw new Error(
+                    mensajeError(datosUsuarios, 'No se pudo consultar la lista de responsables.')
+                );
+            }
+
+            casos = Array.isArray(datosCasos) ? datosCasos : [];
+            estudiantes = Array.isArray(datosEstudiantes)
+                ? datosEstudiantes
+                : [];
+            usuarios = Array.isArray(datosUsuarios)
+                ? datosUsuarios
+                : [];
+        } catch (e) {
+            error =
+                e instanceof Error
+                    ? e.message
+                    : 'Ocurrió un error al cargar la información.';
+        } finally {
+            cargando = false;
+        }
+    }
+
+    function nuevoCaso() {
+        limpiarFormulario();
+        error = '';
+        mensaje = '';
+        mostrarFormulario = true;
+    }
+
+    function editarCaso(caso: Caso) {
+        error = '';
+        mensaje = '';
+
+        idCasoEditando = caso.id_caso;
+        idEstudiante = String(caso.id_estudiante);
+        idResponsable = String(caso.id_usuario_responsable);
+        fechaApertura = caso.fecha_apertura
+            ? caso.fecha_apertura.slice(0, 10)
+            : new Date().toISOString().slice(0, 10);
+
+        mostrarFormulario = true;
+    }
+
+    async function guardarCaso() {
+        error = '';
+        mensaje = '';
+
+        if (!idEstudiante || !idResponsable || !fechaApertura) {
+            error = 'Completa todos los campos para continuar.';
+            return;
+        }
+
+        if (!sesionLista || !idUsuario || !token) {
+            error = 'Tu sesión no está disponible. Inicia sesión nuevamente.';
+            return;
+        }
+
+        guardando = true;
+
+        try {
+            const editando = idCasoEditando !== null;
+
+            const url = editando
+                ? `/casos/${idCasoEditando}?id_usuario=${idUsuario}`
+                : `/casos/?id_usuario=${idUsuario}`;
+
+            const respuesta = await solicitarAPI(url, {
+                method: editando ? 'PUT' : 'POST',
+                body: JSON.stringify({
+                    id_estudiante: Number(idEstudiante),
+                    id_usuario_responsable: Number(idResponsable),
+                    fecha_apertura: fechaApertura
+                })
+            });
+
+            const datos = await leerRespuesta(respuesta);
+
+            if (!respuesta.ok) {
+                throw new Error(
+                    mensajeError(
+                        datos,
+                        editando
+                            ? 'No se pudo actualizar el caso.'
+                            : 'No se pudo registrar el caso.'
+                    )
+                );
+            }
+
+            mensaje = editando
+                ? 'Caso actualizado correctamente.'
+                : 'Caso registrado correctamente.';
+
+            limpiarFormulario();
+            await cargarDatos();
+        } catch (e) {
+            error =
+                e instanceof Error
+                    ? e.message
+                    : 'Ocurrió un error al guardar el caso.';
+        } finally {
+            guardando = false;
+        }
+    }
+
+    async function eliminarCaso(caso: Caso) {
+        const confirmar = confirm(
+            `¿Deseas eliminar el caso #${caso.id_caso} del estudiante ${nombreEstudiante(caso)}?`
+        );
+
+        if (!confirmar) return;
+
+        error = '';
+        mensaje = '';
+        casoEliminando = caso.id_caso;
+
+        try {
+            const respuesta = await solicitarAPI(
+                `/casos/${caso.id_caso}?id_usuario=${idUsuario}`,
+                { method: 'DELETE' }
+            );
+
+            const datos = await leerRespuesta(respuesta);
+
+            if (!respuesta.ok) {
+                throw new Error(
+                    mensajeError(datos, 'No se pudo eliminar el caso.')
+                );
+            }
+
+            mensaje = 'Caso eliminado correctamente.';
+            await cargarDatos();
+        } catch (e) {
+            error =
+                e instanceof Error
+                    ? e.message
+                    : 'Ocurrió un error al eliminar el caso.';
+        } finally {
+            casoEliminando = null;
+        }
+    }
+
+    onMount(() => {
+        try {
+            token = localStorage.getItem('tokenAcceso') ?? '';
+
+            const usuarioGuardado = localStorage.getItem('usuarioSesion');
+
+            if (usuarioGuardado) {
+                const usuario = JSON.parse(usuarioGuardado) as Sesion;
+                idUsuario = Number(usuario.id_usuario ?? 0);
+            }
+
+            if (!token || !Number.isInteger(idUsuario) || idUsuario <= 0) {
+                error = 'No se encontró una sesión válida. Cierra sesión e inicia nuevamente.';
+                return;
+            }
+
+            sesionLista = true;
+            void cargarDatos();
+        } catch {
+            error = 'No se pudo leer la sesión. Inicia sesión nuevamente.';
+        }
+    });
 </script>
 
-<div class="container mt-4">
-	<div class="d-flex justify-content-between align-items-center mb-4">
-		<div>
-			<h2>Gestión de Casos</h2>
-			<p class="text-muted">
-				Administración de casos que requieren acompañamiento escolar.
-			</p>
-		</div>
+<div class="container mt-4 mb-5">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+        <div>
+            <h2 class="fw-bold text-primary mb-1">Gestión de Casos</h2>
+            <p class="text-muted mb-0">
+                Administración de casos que requieren acompañamiento escolar.
+            </p>
+        </div>
 
-		<button
-			class="btn btn-primary"
-			onclick={() => {
-				mostrarFormulario = !mostrarFormulario;
-				error = '';
-				mensaje = '';
-			}}
-		>
-			{mostrarFormulario ? 'Cancelar' : '+ Abrir caso'}
-		</button>
-	</div>
+        <button
+            class="btn btn-primary"
+            onclick={nuevoCaso}
+            disabled={!sesionLista}
+        >
+            + Abrir caso
+        </button>
+    </div>
 
-	{#if mensaje}
-		<div class="alert alert-success" role="alert">{mensaje}</div>
-	{/if}
+    {#if mensaje}
+        <div class="alert alert-success alert-dismissible" role="alert">
+            {mensaje}
+            <button
+                type="button"
+                class="btn-close"
+                aria-label="Cerrar mensaje"
+                onclick={() => (mensaje = '')}
+            ></button>
+        </div>
+    {/if}
 
-	{#if error}
-		<div class="alert alert-danger" role="alert">
-			{error}
-			<button class="btn btn-sm btn-outline-danger ms-2" onclick={cargarDatos}>
-				Reintentar
-			</button>
-		</div>
-	{/if}
+    {#if error}
+        <div class="alert alert-danger" role="alert">
+            <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+                <span>{error}</span>
+                <button
+                    class="btn btn-sm btn-outline-danger"
+                    onclick={() => void cargarDatos()}
+                    disabled={cargando || !sesionLista}
+                >
+                    Reintentar
+                </button>
+            </div>
+        </div>
+    {/if}
 
-	{#if mostrarFormulario}
-		<div class="card shadow-sm mb-4">
-			<div class="card-header">
-				<strong>Registrar nuevo caso</strong>
-			</div>
+    {#if mostrarFormulario}
+        <div class="card shadow-sm border-0 mb-4">
+            <div class="card-header bg-primary text-white py-3">
+                <strong>
+                    {idCasoEditando === null
+                        ? 'Registrar nuevo caso'
+                        : `Editar caso #${idCasoEditando}`}
+                </strong>
+            </div>
 
-			<div class="card-body">
-				<form
-					onsubmit={(event) => {
-						event.preventDefault();
-						abrirCaso();
-					}}
-				>
-					<div class="row g-3">
-						<div class="col-md-4">
-							<label for="estudiante" class="form-label">
-								Estudiante
-							</label>
+            <div class="card-body">
+                <form
+                    onsubmit={(event) => {
+                        event.preventDefault();
+                        void guardarCaso();
+                    }}
+                >
+                    <div class="row g-3">
+                        <div class="col-md-4">
+                            <label for="estudiante" class="form-label">
+                                Estudiante
+                            </label>
 
-							<select
-								id="estudiante"
-								class="form-select"
-								bind:value={idEstudiante}
-								required
-							>
-								<option value="">Selecciona un estudiante</option>
+                            <select
+                                id="estudiante"
+                                class="form-select"
+                                bind:value={idEstudiante}
+                                required
+                            >
+                                <option value="">Selecciona un estudiante</option>
 
-								{#each estudiantes as estudiante}
-									<option value={String(estudiante.id_estudiante)}>
-										{estudiante.nombre} {estudiante.apellido}
-									</option>
-								{/each}
-							</select>
-						</div>
+                                {#each estudiantes as estudiante (estudiante.id_estudiante)}
+                                    <option value={String(estudiante.id_estudiante)}>
+                                        {estudiante.nombre} {estudiante.apellido}
+                                    </option>
+                                {/each}
+                            </select>
+                        </div>
 
-						<div class="col-md-4">
-							<label for="responsable" class="form-label">
-								Usuario responsable
-							</label>
+                        <div class="col-md-4">
+                            <label for="responsable" class="form-label">
+                                Usuario responsable
+                            </label>
 
-							<select
-								id="responsable"
-								class="form-select"
-								bind:value={idResponsable}
-								required
-							>
-								<option value="">Selecciona un responsable</option>
+                            <select
+                                id="responsable"
+                                class="form-select"
+                                bind:value={idResponsable}
+                                required
+                            >
+                                <option value="">Selecciona un responsable</option>
 
-								{#each usuarios as usuario}
-									<option value={String(usuario.id_usuario)}>
-										{usuario.nombre} {usuario.apellido}
-									</option>
-								{/each}
-							</select>
-						</div>
+                                {#each usuarios as usuario (usuario.id_usuario)}
+                                    <option value={String(usuario.id_usuario)}>
+                                        {usuario.nombre} {usuario.apellido}
+                                    </option>
+                                {/each}
+                            </select>
+                        </div>
 
-						<div class="col-md-4">
-							<label for="fecha" class="form-label">
-								Fecha de apertura
-							</label>
+                        <div class="col-md-4">
+                            <label for="fecha" class="form-label">
+                                Fecha de apertura
+                            </label>
 
-							<input
-								id="fecha"
-								type="date"
-								class="form-control"
-								bind:value={fechaApertura}
-								required
-							/>
-						</div>
+                            <input
+                                id="fecha"
+                                type="date"
+                                class="form-control"
+                                bind:value={fechaApertura}
+                                required
+                            />
+                        </div>
 
-						<div class="col-12">
-							<button
-								type="submit"
-								class="btn btn-success"
-								disabled={guardando ||
-									estudiantes.length === 0 ||
-									usuarios.length === 0}
-							>
-								{guardando ? 'Guardando...' : 'Guardar caso'}
-							</button>
-						</div>
-					</div>
-				</form>
+                        <div class="col-12 d-flex flex-wrap gap-2">
+                            <button
+                                type="submit"
+                                class="btn btn-success"
+                                disabled={guardando || estudiantes.length === 0 || usuarios.length === 0}
+                            >
+                                {#if guardando}
+                                    Guardando...
+                                {:else}
+                                    {idCasoEditando === null
+                                        ? 'Guardar caso'
+                                        : 'Guardar cambios'}
+                                {/if}
+                            </button>
 
-				<div class="form-text mt-3">
-					El responsable debe ser un usuario válido y el estudiante debe
-					estar activo en el sistema.
-				</div>
-			</div>
-		</div>
-	{/if}
+                            <button
+                                type="button"
+                                class="btn btn-outline-secondary"
+                                onclick={limpiarFormulario}
+                                disabled={guardando}
+                            >
+                                Cancelar
+                            </button>
+                        </div>
+                    </div>
+                </form>
 
-	<div class="card shadow-sm">
-		<div class="card-header d-flex justify-content-between align-items-center">
-			<strong>Casos de acompañamiento</strong>
+                {#if estudiantes.length === 0 || usuarios.length === 0}
+                    <div class="alert alert-warning mt-3 mb-0">
+                        Para registrar un caso, la API debe proporcionar estudiantes y usuarios.
+                    </div>
+                {/if}
+            </div>
+        </div>
+    {/if}
 
-			<button
-				class="btn btn-sm btn-outline-primary"
-				onclick={cargarDatos}
-				disabled={cargando}
-			>
-				{cargando ? 'Cargando...' : 'Actualizar'}
-			</button>
-		</div>
+    <div class="card shadow-sm border-0">
+        <div class="card-header bg-white d-flex flex-wrap justify-content-between align-items-center gap-2 py-3">
+            <strong>Casos de acompañamiento</strong>
 
-		<div class="card-body">
-			{#if cargando}
-				<div class="text-center py-4">
-					<div class="spinner-border text-primary" role="status">
-						<span class="visually-hidden">Cargando...</span>
-					</div>
-					<p class="text-muted mt-2">Consultando casos...</p>
-				</div>
-			{:else if casos.length === 0}
-				<div class="alert alert-info mb-0">
-					No hay casos registrados para mostrar.
-				</div>
-			{:else}
-				<div class="table-responsive">
-					<table class="table table-hover align-middle">
-						<thead class="table-dark">
-							<tr>
-								<th>ID</th>
-								<th>Estudiante</th>
-								<th>Responsable</th>
-								<th>Fecha de apertura</th>
-								<th>Estado</th>
-							</tr>
-						</thead>
+            <button
+                class="btn btn-sm btn-outline-primary"
+                onclick={() => void cargarDatos()}
+                disabled={cargando || !sesionLista}
+            >
+                {cargando ? 'Cargando...' : 'Actualizar lista'}
+            </button>
+        </div>
 
-						<tbody>
-							{#each casos as caso (caso.id_caso)}
-								<tr>
-									<td>{caso.id_caso}</td>
-									<td>{nombreEstudiante(caso)}</td>
-									<td>{nombreResponsable(caso)}</td>
-									<td>{formatearFecha(caso.fecha_apertura)}</td>
-									<td>
-										<span class="badge {claseEstado(caso)}">
-											{estadoCaso(caso)}
-										</span>
-									</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-			{/if}
-		</div>
-	</div>
+        <div class="card-body">
+            {#if cargando}
+                <div class="text-center py-5">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Cargando...</span>
+                    </div>
+                    <p class="text-muted mt-2">Consultando casos...</p>
+                </div>
+            {:else if casos.length === 0}
+                <div class="alert alert-info mb-0">
+                    No hay casos registrados para mostrar.
+                </div>
+            {:else}
+                <div class="table-responsive">
+                    <table class="table table-hover table-striped align-middle">
+                        <thead class="table-dark">
+                            <tr>
+                                <th>ID</th>
+                                <th>Estudiante</th>
+                                <th>Responsable</th>
+                                <th>Fecha de apertura</th>
+                                <th>Estado</th>
+                                <th>Acciones</th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                            {#each casos as caso, indice (caso.id_caso ?? `${caso.id_estudiante}-${caso.fecha_apertura}-${indice}`)}
+                                <tr>
+                                    <td>{caso.id_caso ?? '—'}</td>
+                                    <td>{nombreEstudiante(caso)}</td>
+                                    <td>{nombreResponsable(caso)}</td>
+                                    <td>{formatearFecha(caso.fecha_apertura)}</td>
+                                    <td>
+                                        <span class="badge {claseEstado(caso)}">
+                                            {estadoCaso(caso)}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <div class="d-flex flex-wrap gap-2">
+                                            <button
+                                                class="btn btn-sm btn-outline-primary"
+                                                onclick={() => editarCaso(caso)}
+                                            >
+                                                Editar
+                                            </button>
+
+                                            <button
+                                                class="btn btn-sm btn-outline-danger"
+                                                onclick={() => void eliminarCaso(caso)}
+                                                disabled={casoEliminando === caso.id_caso || !caso.id_caso}
+                                            >
+                                                {casoEliminando === caso.id_caso
+                                                    ? 'Eliminando...'
+                                                    : 'Eliminar'}
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            {/each}
+                        </tbody>
+                    </table>
+                </div>
+            {/if}
+        </div>
+    </div>
 </div>

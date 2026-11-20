@@ -21,3 +21,16 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Archivos auxiliares locales
+archivos_frontend.txt
+estructura_frontend.txt
+cls
+
+# Copias de seguridad
+*.bak
+*.antes-celda-personalizada.bak
+*.formfield.bak
+*.statusbadge.bak
+*.tabla-status.bak
+
